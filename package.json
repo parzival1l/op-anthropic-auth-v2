@@ -1,0 +1,37 @@
+{
+  "name": "op-anthropic-auth-v2",
+  "version": "0.1.0",
+  "description": "OpenCode 2 plugin for Anthropic OAuth with Claude Pro/Max",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode2",
+    "anthropic",
+    "claude",
+    "oauth",
+    "auth",
+    "plugin"
+  ],
+  "license": "MIT",
+  "author": "parzival1l <nandhu02111997@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/parzival1l/op-anthropic-auth-v2.git"
+  },
+  "homepage": "https://github.com/parzival1l/op-anthropic-auth-v2#readme",
+  "bugs": {
+    "url": "https://github.com/parzival1l/op-anthropic-auth-v2/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
