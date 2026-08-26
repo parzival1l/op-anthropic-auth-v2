@@ -2,6 +2,11 @@
 
 OpenCode 2 plugin for Anthropic OAuth with Claude Pro/Max.
 
+> [!WARNING]
+> This is an unofficial compatibility plugin. Anthropic may restrict third-party use
+> of Claude subscription OAuth credentials, and using it could put your account at
+> risk. Review Anthropic's current terms and use it at your own discretion.
+
 Port of [op-anthropic-auth](https://github.com/leohenon/op-anthropic-auth) (MIT, by
 leohenon) to the [OpenCode 2](https://opencode.ai/v2/docs) plugin API. The original
 plugin targets OpenCode 1 and cannot load in v2 — this package is the v2 equivalent.
@@ -45,3 +50,11 @@ Both can coexist: v1 ignores this package's format, v2 ignores the v1 package.
 
 Built against `opencode2` `0.0.0-beta-18269`. The v2 plugin API is beta and may
 change; pin accordingly.
+
+## Development
+
+```sh
+npm test
+npm run check
+npm run pack:dry-run
+```

@@ -60,7 +60,7 @@ function writeAuthEntry(entry) {
   const all = readAuthFile() ?? {};
   all.anthropic = entry;
   const tmp = `${AUTH_FILE}.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(all, null, 2));
+  writeFileSync(tmp, JSON.stringify(all, null, 2), { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, AUTH_FILE);
 }
@@ -68,7 +68,7 @@ function writeAuthEntry(entry) {
 let refreshPromise = null;
 
 async function refreshAccessToken(auth) {
-  const refreshToken = auth.refresh;
+  let refreshToken = auth.refresh;
   const maxRetries = 2;
   const baseDelayMs = 500;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -95,12 +95,13 @@ async function refreshAccessToken(auth) {
       }
       // On 401, another process may have already rotated the refresh token.
       if (response.status === 401 && attempt < maxRetries) {
-        await response.body?.cancel();
         const updated = readAuthFile()?.anthropic;
         if (isOAuthAuth(updated) && updated.refresh !== refreshToken) {
+          await response.body?.cancel();
           if (updated.access && updated.expires > Date.now()) {
             return updated.access;
           }
+          refreshToken = updated.refresh;
           continue;
         }
       }
@@ -261,11 +262,11 @@ function relocateSystemEntriesToFirstUserMessage(system, messages) {
 }
 
 function prefixName(name) {
-  return `${TOOL_PREFIX}${name.charAt(0).toUpperCase()}${name.slice(1)}`;
+  return `${TOOL_PREFIX}${name}`;
 }
 
 function unprefixName(name) {
-  return `${name.charAt(0).toLowerCase()}${name.slice(1)}`;
+  return name;
 }
 
 function prefixToolNames(parsed) {
@@ -319,25 +320,63 @@ function rewriteResponse(response) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+  const isEventStream = response.headers
+    .get("content-type")
+    ?.toLowerCase()
+    .includes("text/event-stream");
+  let buffered = "";
+  let finished = false;
+
+  const rewriteText = (text) =>
+    text.replace(
+      /"name"\s*:\s*"mcp_([^"]+)"/g,
+      (_match, name) => `"name": "${unprefixName(name)}"`,
+    );
+
   const stream = new ReadableStream({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        controller.close();
-        return;
+      while (true) {
+        if (isEventStream) {
+          const boundary = buffered.match(/\r?\n\r?\n/);
+          if (boundary?.index != null) {
+            const end = boundary.index + boundary[0].length;
+            const event = buffered.slice(0, end);
+            buffered = buffered.slice(end);
+            controller.enqueue(encoder.encode(rewriteText(event)));
+            return;
+          }
+        }
+
+        if (finished) {
+          if (buffered) {
+            controller.enqueue(encoder.encode(rewriteText(buffered)));
+            buffered = "";
+          } else {
+            controller.close();
+          }
+          return;
+        }
+
+        const { done, value } = await reader.read();
+        if (done) {
+          buffered += decoder.decode();
+          finished = true;
+        } else {
+          buffered += decoder.decode(value, { stream: true });
+        }
       }
-      let text = decoder.decode(value, { stream: true });
-      text = text.replace(
-        /"name"\s*:\s*"mcp_([^"]+)"/g,
-        (_match, name) => `"name": "${unprefixName(name)}"`,
-      );
-      controller.enqueue(encoder.encode(text));
+    },
+    async cancel(reason) {
+      await reader.cancel(reason);
     },
   });
+  const headers = new Headers(response.headers);
+  headers.delete("content-encoding");
+  headers.delete("content-length");
   return new Response(stream, {
     status: response.status,
     statusText: response.statusText,
-    headers: response.headers,
+    headers,
   });
 }
 
@@ -361,7 +400,7 @@ export default {
         }
         if (!isAnthropicApi(url)) return;
 
-        const access = await currentAccessToken().catch(() => null);
+        const access = await currentAccessToken();
         if (!access) return; // not OAuth (API key user) — leave untouched
 
         const headers = new Headers(event.request.headers);
@@ -385,6 +424,7 @@ export default {
           headers,
           body,
           duplex: "half",
+          signal: event.request.signal,
         });
       },
       { providerID: "anthropic" },
