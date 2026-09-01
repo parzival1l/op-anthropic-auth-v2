@@ -1,5 +1,7 @@
 # op-anthropic-auth-v2
 
+[![npm](https://img.shields.io/npm/v/op-anthropic-auth-v2?style=flat-square&logo=npm&logoColor=white&label=npm&color=teal)](https://www.npmjs.com/package/op-anthropic-auth-v2)
+
 OpenCode 2 plugin for Anthropic OAuth with Claude Pro/Max.
 
 > [!WARNING]
