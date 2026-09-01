@@ -48,8 +48,9 @@ Both can coexist: v1 ignores this package's format, v2 ignores the v1 package.
 
 ## Compatibility
 
-Built against `opencode2` `0.0.0-beta-18269`. The v2 plugin API is beta and may
-change; pin accordingly.
+Built against `opencode2` `0.0.0-beta-18743`. Version `0.1.1` reports Claude Code
+`2.1.257` to meet Anthropic's model compatibility check. The v2 plugin API is beta
+and may change; pin accordingly.
 
 ## Development
 

@@ -20,12 +20,12 @@ const PARAGRAPH_REMOVAL_ANCHORS = [
 const TEXT_REPLACEMENTS = [
   { match: "if OpenCode honestly", replacement: "if the assistant honestly" },
 ];
-const CLAUDE_CODE_VERSION = "2.1.87";
+const CLAUDE_CODE_VERSION = "2.1.257";
 const CLAUDE_CODE_ENTRYPOINT = "sdk-cli";
 const BILLING_HEADER_PREFIX = "x-anthropic-billing-header:";
 const CCH_SALT = "59cf53e54c78";
 const CCH_POSITIONS = [4, 7, 20];
-const REQUEST_USER_AGENT = "claude-cli/2.1.87 (external, cli)";
+const REQUEST_USER_AGENT = `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`;
 const TOKEN_USER_AGENT = "axios/1.13.6";
 
 const AUTH_FILE =

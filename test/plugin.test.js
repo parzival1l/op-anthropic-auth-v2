@@ -122,6 +122,24 @@ test("rewritten requests retain their abort signal", async () => {
   assert.equal(event.request.signal.aborted, true);
 });
 
+test("rewritten requests report the supported Claude Code version", async () => {
+  const event = {
+    request: new Request("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({ messages: [{ role: "user", content: "hello" }] }),
+    }),
+  };
+
+  await hooks["http.request"](event);
+
+  assert.equal(
+    event.request.headers.get("user-agent"),
+    "claude-cli/2.1.257 (external, cli)",
+  );
+  const body = await event.request.json();
+  assert.match(body.system[0].text, /cc_version=2\.1\.257\./);
+});
+
 test("tool names round-trip without changing case", async () => {
   const event = {
     request: new Request("https://api.anthropic.com/v1/messages", {
