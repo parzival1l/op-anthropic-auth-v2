@@ -4,14 +4,22 @@
 
 OpenCode 2 plugin for Anthropic OAuth with Claude Pro/Max.
 
+## Origin and attribution
+
+This package is adapted from
+[op-anthropic-auth](https://github.com/leohenon/op-anthropic-auth) version `0.1.4`,
+created by [leohenon](https://github.com/leohenon) and released under the MIT
+License. The original project's authentication approach, request shaping, and
+plugin design form the basis of this package.
+
+This adaptation ports that work to the OpenCode 2 plugin API. It is maintained as
+a separate package and is not an official OpenCode 2 release from the original
+author. The [license](./LICENSE) retains credit for the original work.
+
 > [!WARNING]
 > This is an unofficial compatibility plugin. Anthropic may restrict third-party use
 > of Claude subscription OAuth credentials, and using it could put your account at
 > risk. Review Anthropic's current terms and use it at your own discretion.
-
-Port of [op-anthropic-auth](https://github.com/leohenon/op-anthropic-auth) (MIT, by
-leohenon) to the [OpenCode 2](https://opencode.ai/v2/docs) plugin API. The original
-plugin targets OpenCode 1 and cannot load in v2 — this package is the v2 equivalent.
 
 ## What it does
 
@@ -45,8 +53,8 @@ Requires existing Anthropic OAuth credentials (`opencode2 auth login`, or creden
 already stored by OpenCode 1 in `~/.local/share/opencode/auth.json`). Users with a
 plain API key are unaffected — the plugin leaves non-OAuth setups untouched.
 
-For OpenCode 1, keep using [op-anthropic-auth](https://github.com/leohenon/op-anthropic-auth).
-Both can coexist: v1 ignores this package's format, v2 ignores the v1 package.
+This adaptation only targets OpenCode 2. OpenCode 1 users should use the original
+[op-anthropic-auth](https://github.com/leohenon/op-anthropic-auth) package.
 
 ## Compatibility
 
