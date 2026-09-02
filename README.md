@@ -59,7 +59,7 @@ This adaptation only targets OpenCode 2. OpenCode 1 users should use the origina
 
 ## Compatibility
 
-Built against `opencode2` `0.0.0-beta-18743`. Version `0.2.0` reports Claude Code
+Built against `opencode2` `0.0.0-beta-18743`. Version `0.1.2` reports Claude Code
 `2.1.257` to meet Anthropic's model compatibility check. The v2 plugin API is beta
 and may change; pin accordingly.
 
