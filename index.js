@@ -1,13 +1,19 @@
 // Anthropic OAuth (Claude Pro/Max) support for OpenCode 2.
 // Port of op-anthropic-auth@0.1.4 to the v2 plugin API.
 // v1 loads op-anthropic-auth itself; this file targets opencode2 only.
-import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync, renameSync, chmodSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { generatePKCE } from "@openauthjs/openauth/pkce";
 
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
+const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
 const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+const CALLBACK_URL = "https://platform.claude.com/oauth/code/callback";
+const AUTH_METHOD_ID = "oauth";
+const AUTH_SCOPE =
+  "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload";
 const REQUIRED_BETAS = ["oauth-2025-04-20", "interleaved-thinking-2025-05-14"];
 const TOOL_PREFIX = "mcp_";
 const OPENCODE_IDENTITY_PREFIX = "You are OpenCode";
@@ -28,109 +34,183 @@ const CCH_POSITIONS = [4, 7, 20];
 const REQUEST_USER_AGENT = `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`;
 const TOKEN_USER_AGENT = "axios/1.13.6";
 
-const AUTH_FILE =
-  process.env.XDG_DATA_HOME != null
-    ? join(process.env.XDG_DATA_HOME, "opencode", "auth.json")
-    : join(homedir(), ".local", "share", "opencode", "auth.json");
-
 function isRecord(value) {
   return value != null && typeof value === "object" && !Array.isArray(value);
 }
 
-function isOAuthAuth(value) {
+function isPluginOAuthCredential(value) {
   return (
     isRecord(value) &&
     value.type === "oauth" &&
+    value.methodID === AUTH_METHOD_ID &&
     typeof value.refresh === "string" &&
+    value.refresh.length > 0 &&
+    typeof value.access === "string" &&
+    value.access.length > 0 &&
     typeof value.expires === "number"
   );
 }
 
-// ---- auth store ----
-
-function readAuthFile() {
+function migrateLegacyCredential() {
+  const authFile =
+    process.env.XDG_DATA_HOME != null
+      ? join(process.env.XDG_DATA_HOME, "opencode", "auth.json")
+      : join(homedir(), ".local", "share", "opencode", "auth.json");
   try {
-    return JSON.parse(readFileSync(AUTH_FILE, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function writeAuthEntry(entry) {
-  const all = readAuthFile() ?? {};
-  all.anthropic = entry;
-  const tmp = `${AUTH_FILE}.tmp-${process.pid}`;
-  writeFileSync(tmp, JSON.stringify(all, null, 2), { mode: 0o600 });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, AUTH_FILE);
-}
-
-let refreshPromise = null;
-
-async function refreshAccessToken(auth) {
-  let refreshToken = auth.refresh;
-  const maxRetries = 2;
-  const baseDelayMs = 500;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    if (attempt > 0) {
-      await new Promise((r) => setTimeout(r, baseDelayMs * 2 ** (attempt - 1)));
+    const all = JSON.parse(readFileSync(authFile, "utf8"));
+    const credential = all?.anthropic;
+    if (
+      !isRecord(credential) ||
+      credential.type !== "oauth" ||
+      credential.methodID != null ||
+      typeof credential.refresh !== "string" ||
+      credential.refresh.length === 0 ||
+      !Number.isSafeInteger(credential.expires)
+    ) {
+      return false;
     }
-    const response = await fetch(TOKEN_URL, {
-      method: "POST",
-      headers: {
-        Accept: "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "User-Agent": TOKEN_USER_AGENT,
-      },
-      body: JSON.stringify({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-        client_id: CLIENT_ID,
-      }),
-    });
-    if (!response.ok) {
-      if (response.status >= 500 && attempt < maxRetries) {
-        await response.body?.cancel();
-        continue;
-      }
-      // On 401, another process may have already rotated the refresh token.
-      if (response.status === 401 && attempt < maxRetries) {
-        const updated = readAuthFile()?.anthropic;
-        if (isOAuthAuth(updated) && updated.refresh !== refreshToken) {
-          await response.body?.cancel();
-          if (updated.access && updated.expires > Date.now()) {
-            return updated.access;
-          }
-          refreshToken = updated.refresh;
-          continue;
-        }
-      }
-      const body = await response.text().catch(() => "");
-      throw new Error(`Token refresh failed: ${response.status} — ${body}`);
-    }
-    const json = await response.json();
-    const entry = {
-      type: "oauth",
-      refresh: json.refresh_token,
-      access: json.access_token,
-      expires: Date.now() + json.expires_in * 1000,
+
+    const hasAccess = typeof credential.access === "string" && credential.access.length > 0;
+    all.anthropic = {
+      ...credential,
+      methodID: AUTH_METHOD_ID,
+      access: hasAccess ? credential.access : "",
+      expires: hasAccess ? credential.expires : 0,
     };
-    writeAuthEntry(entry);
-    return entry.access;
+    const temporary = `${authFile}.tmp-${process.pid}`;
+    writeFileSync(temporary, JSON.stringify(all, null, 2), { mode: 0o600 });
+    chmodSync(temporary, 0o600);
+    renameSync(temporary, authFile);
+    return true;
+  } catch {
+    return false;
   }
-  throw new Error("Token refresh failed: retries exhausted");
 }
 
-async function currentAccessToken() {
-  const auth = readAuthFile()?.anthropic;
-  if (!isOAuthAuth(auth)) return null;
-  if (auth.access && auth.expires > Date.now() + 30_000) return auth.access;
-  if (!refreshPromise) {
-    refreshPromise = refreshAccessToken(auth).finally(() => {
-      refreshPromise = null;
-    });
+function parseAuthorizationCode(input) {
+  const text = input.trim();
+  try {
+    const url = new URL(text);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    if (code && state) return { code, state };
+  } catch {
+    // The callback may be a code-state pair instead of a URL.
   }
-  return refreshPromise;
+
+  const [code, state, ...rest] = text.split("#");
+  if (code && state && rest.length === 0) return { code, state };
+
+  const params = new URLSearchParams(text);
+  const queryCode = params.get("code");
+  const queryState = params.get("state");
+  if (queryCode && queryState) return { code: queryCode, state: queryState };
+  throw new Error("Authorization callback must include a code and state");
+}
+
+function makeAuthorizationUrl(challenge, state) {
+  const url = new URL(AUTHORIZE_URL);
+  url.searchParams.set("code", "true");
+  url.searchParams.set("client_id", CLIENT_ID);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("redirect_uri", CALLBACK_URL);
+  url.searchParams.set("scope", AUTH_SCOPE);
+  url.searchParams.set("code_challenge", challenge);
+  url.searchParams.set("code_challenge_method", "S256");
+  url.searchParams.set("state", state);
+  return url.toString();
+}
+
+async function requestTokens(body, action, requireRefreshToken = true) {
+  const response = await fetch(TOKEN_URL, {
+    method: "POST",
+    headers: {
+      Accept: "application/json, text/plain, */*",
+      "Content-Type": "application/json",
+      "User-Agent": TOKEN_USER_AGENT,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const detail = await response.text().catch(() => "");
+    throw new Error(`${action} failed: ${response.status}${detail ? ` ${detail}` : ""}`);
+  }
+
+  const result = await response.json();
+  if (
+    !isRecord(result) ||
+    typeof result.access_token !== "string" ||
+    result.access_token.length === 0 ||
+    !Number.isSafeInteger(result.expires_in) ||
+    result.expires_in <= 0 ||
+    (requireRefreshToken &&
+      (typeof result.refresh_token !== "string" || result.refresh_token.length === 0)) ||
+    (!requireRefreshToken &&
+      result.refresh_token != null &&
+      (typeof result.refresh_token !== "string" || result.refresh_token.length === 0))
+  ) {
+    throw new Error(`${action} failed: malformed token response`);
+  }
+  return result;
+}
+
+function toCredential(tokens, metadata, fallbackRefreshToken) {
+  return /** @type {import("@opencode-ai/plugin").Credential.OAuth} */ ({
+    type: /** @type {"oauth"} */ ("oauth"),
+    methodID: AUTH_METHOD_ID,
+    refresh: tokens.refresh_token ?? fallbackRefreshToken,
+    access: tokens.access_token,
+    expires: Date.now() + tokens.expires_in * 1000,
+    ...(metadata == null ? {} : { metadata }),
+  });
+}
+
+async function authorize() {
+  const pkce = await generatePKCE();
+  const state = randomBytes(16).toString("hex");
+  return {
+    url: makeAuthorizationUrl(pkce.challenge, state),
+    instructions: "Authorize Claude Pro/Max, then paste the returned code here.",
+    mode: /** @type {"code"} */ ("code"),
+    async callback(input) {
+      const parsed = parseAuthorizationCode(input);
+      if (parsed.state !== state) throw new Error("Authorization state does not match");
+      const tokens = await requestTokens(
+        {
+          code: parsed.code,
+          state: parsed.state,
+          grant_type: "authorization_code",
+          client_id: CLIENT_ID,
+          redirect_uri: CALLBACK_URL,
+          code_verifier: pkce.verifier,
+        },
+        "Token exchange",
+      );
+      return toCredential(tokens);
+    },
+  };
+}
+
+async function refreshCredential(
+  /** @type {import("@opencode-ai/plugin").Credential.OAuth} */ credential,
+) {
+  const tokens = await requestTokens(
+    {
+      grant_type: "refresh_token",
+      refresh_token: credential.refresh,
+      client_id: CLIENT_ID,
+    },
+    "Token refresh",
+    false,
+  );
+  return toCredential(tokens, credential.metadata, credential.refresh);
+}
+
+async function currentCredential(ctx) {
+  const connection = await ctx.integration.connection.active("anthropic");
+  if (!connection) return null;
+  const credential = await ctx.integration.connection.resolve(connection);
+  return isPluginOAuthCredential(credential) ? credential : null;
 }
 
 // ---- request rewriting ----
@@ -386,9 +466,24 @@ function isAnthropicApi(url) {
 
 // ---- plugin ----
 
-export default {
+/** @type {import("@opencode-ai/plugin").Plugin.Plugin} */
+const plugin = {
   id: "anthropic-oauth-v2",
   async setup(ctx) {
+    migrateLegacyCredential();
+    await ctx.integration.transform((draft) => {
+      draft.method.update({
+        integrationID: "anthropic",
+        method: {
+          id: AUTH_METHOD_ID,
+          type: "oauth",
+          label: "Claude Pro/Max",
+        },
+        authorize,
+        refresh: refreshCredential,
+      });
+    });
+
     await ctx.session.hook(
       "http.request",
       async (event) => {
@@ -400,11 +495,11 @@ export default {
         }
         if (!isAnthropicApi(url)) return;
 
-        const access = await currentAccessToken();
-        if (!access) return; // not OAuth (API key user) — leave untouched
+        const credential = await currentCredential(ctx);
+        if (!credential) return;
 
         const headers = new Headers(event.request.headers);
-        headers.set("authorization", `Bearer ${access}`);
+        headers.set("authorization", `Bearer ${credential.access}`);
         headers.set("anthropic-beta", mergeBetaHeaders(headers));
         headers.set("user-agent", REQUEST_USER_AGENT);
         headers.delete("x-api-key");
@@ -423,7 +518,6 @@ export default {
           method: event.request.method,
           headers,
           body,
-          duplex: "half",
           signal: event.request.signal,
         });
       },
@@ -432,7 +526,8 @@ export default {
 
     await ctx.session.hook(
       "http.response",
-      (event) => {
+      async (event) => {
+        if (event.request.headers.get("user-agent") !== REQUEST_USER_AGENT) return;
         // Rewrite unless the response URL is present and provably non-Anthropic.
         try {
           const url = new URL(event.response.url);
@@ -446,3 +541,5 @@ export default {
     );
   },
 };
+
+export default plugin;

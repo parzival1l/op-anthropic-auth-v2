@@ -1,6 +1,6 @@
 {
   "name": "op-anthropic-auth-v2",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "OpenCode 2 plugin for Anthropic OAuth with Claude Pro/Max",
   "type": "module",
   "main": "./index.js",
@@ -36,7 +36,16 @@
   },
   "scripts": {
     "test": "node --test",
-    "check": "node --check index.js && npm test",
+    "typecheck": "tsc",
+    "check": "node --check index.js && npm run typecheck && npm test",
     "pack:dry-run": "npm pack --dry-run"
+  },
+  "dependencies": {
+    "@openauthjs/openauth": "0.4.3"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "0.0.0-beta-18743",
+    "@types/node": "24.6.1",
+    "typescript": "5.9.3"
   }
 }

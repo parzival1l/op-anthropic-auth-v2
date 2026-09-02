@@ -27,18 +27,19 @@ OpenCode 2 beta sends Anthropic OAuth requests as-is, and Anthropic rejects them
 an opaque `429` (`{"message":"Error"}`). This plugin rewrites every request to
 `api.anthropic.com` so it passes OAuth gating:
 
+- registers a `Claude Pro/Max` browser login using OAuth and PKCE
+- lets OpenCode 2 store credentials and refresh expired tokens
 - sets the `claude-cli` user-agent and required `anthropic-beta` headers
 - adds the `x-anthropic-billing-header` system block
 - prepends the Claude Code identity to the system prompt and relocates remaining
   system text into the first user message
 - prefixes tool names with `mcp_` and rewrites the response stream back
-- refreshes the OAuth token on expiry and persists it to the shared
-  `~/.local/share/opencode/auth.json`
 
 ## Install
 
 ```sh
 opencode2 plugin add op-anthropic-auth-v2
+opencode2 auth login anthropic --method oauth
 ```
 
 or add it to `~/.config/opencode/opencode.jsonc`:
@@ -49,23 +50,29 @@ or add it to `~/.config/opencode/opencode.jsonc`:
 }
 ```
 
-Requires existing Anthropic OAuth credentials (`opencode2 auth login`, or credentials
-already stored by OpenCode 1 in `~/.local/share/opencode/auth.json`). Users with a
-plain API key are unaffected — the plugin leaves non-OAuth setups untouched.
+The login command opens Anthropic's authorization page. Complete authorization, then
+paste the returned code into OpenCode 2. Users with a plain API key are unaffected;
+the plugin leaves non-OAuth connections untouched.
 
 This adaptation only targets OpenCode 2. OpenCode 1 users should use the original
 [op-anthropic-auth](https://github.com/leohenon/op-anthropic-auth) package.
 
 ## Compatibility
 
-Built against `opencode2` `0.0.0-beta-18743`. Version `0.1.1` reports Claude Code
+Built against `opencode2` `0.0.0-beta-18743`. Version `0.2.0` reports Claude Code
 `2.1.257` to meet Anthropic's model compatibility check. The v2 plugin API is beta
 and may change; pin accordingly.
+
+The runtime uses `@openauthjs/openauth` for PKCE generation. Development uses the
+matching `@opencode-ai/plugin` beta types, TypeScript, and Node.js types to check the
+published JavaScript against the OpenCode 2 plugin API.
 
 ## Development
 
 ```sh
+npm install
 npm test
+npm run typecheck
 npm run check
 npm run pack:dry-run
 ```
