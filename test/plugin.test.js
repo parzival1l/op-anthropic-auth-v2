@@ -1,8 +1,21 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, beforeEach, test } from "node:test";
+
+// Pin the reported version so assertions do not depend on the Claude Code
+// install of whoever runs the suite.
+const PINNED_VERSION = "2.1.257";
+// Must match FALLBACK_CLAUDE_CODE_VERSION in index.js.
+const FALLBACK_VERSION = "2.1.265";
 
 const dataHome = mkdtempSync(join(tmpdir(), "op-anthropic-auth-v2-test-"));
 const authDirectory = join(dataHome, "opencode");
@@ -30,29 +43,16 @@ function chunkedResponse(chunks, options = {}) {
 function oauthResponseEvent(response) {
   return {
     request: new Request("https://api.anthropic.com/v1/messages?beta=true", {
-      headers: { "user-agent": "claude-cli/2.1.257 (external, cli)" },
+      headers: { "user-agent": `claude-cli/${PINNED_VERSION} (external, cli)` },
     }),
     response,
   };
 }
 
-before(async () => {
-  process.env.XDG_DATA_HOME = dataHome;
-  mkdirSync(authDirectory, { recursive: true });
-  writeFileSync(
-    authFile,
-    JSON.stringify({
-      anthropic: {
-        type: "oauth",
-        refresh: "legacy-refresh-token",
-        access: "legacy-access-token",
-        expires: Date.now() + 60_000,
-      },
-    }),
-    { mode: 0o600 },
-  );
-  const { default: plugin } = await import(`../index.js?test=${Date.now()}`);
-  hooks = {};
+// Load a fresh module instance so its cached version lookup starts empty.
+async function loadHooks() {
+  const { default: plugin } = await import(`../index.js?test=${Date.now()}-${Math.random()}`);
+  const loaded = {};
   await plugin.setup({
     integration: {
       async transform(callback) {
@@ -75,10 +75,60 @@ before(async () => {
     },
     session: {
       async hook(name, callback) {
-        hooks[name] = callback;
+        loaded[name] = callback;
       },
     },
   });
+  return loaded;
+}
+
+// Apply environment overrides for one call, then restore them. `undefined`
+// deletes a variable.
+async function withEnv(overrides, run) {
+  const previous = new Map();
+  for (const [key, value] of Object.entries(overrides)) {
+    previous.set(key, process.env[key]);
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  try {
+    await run();
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+}
+
+async function userAgentFrom(hooksToUse) {
+  const event = {
+    request: new Request("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      body: JSON.stringify({ messages: [{ role: "user", content: "hello" }] }),
+    }),
+  };
+  await hooksToUse["http.request"](event);
+  return event.request.headers.get("user-agent");
+}
+
+before(async () => {
+  process.env.XDG_DATA_HOME = dataHome;
+  process.env.CLAUDE_CODE_VERSION = PINNED_VERSION;
+  mkdirSync(authDirectory, { recursive: true });
+  writeFileSync(
+    authFile,
+    JSON.stringify({
+      anthropic: {
+        type: "oauth",
+        refresh: "legacy-refresh-token",
+        access: "legacy-access-token",
+        expires: Date.now() + 60_000,
+      },
+    }),
+    { mode: 0o600 },
+  );
+  hooks = await loadHooks();
 });
 
 beforeEach(() => {
@@ -176,10 +226,62 @@ test("rewritten requests report the supported Claude Code version", async () => 
 
   assert.equal(
     event.request.headers.get("user-agent"),
-    "claude-cli/2.1.257 (external, cli)",
+    `claude-cli/${PINNED_VERSION} (external, cli)`,
   );
   const body = await event.request.json();
-  assert.match(body.system[0].text, /cc_version=2\.1\.257\./);
+  assert.match(body.system[0].text, new RegExp(`cc_version=${PINNED_VERSION}\\.`));
+});
+
+test("reads the version from a native Claude Code install", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claude-native-"));
+  const versions = join(root, "versions");
+  const bin = join(root, "bin");
+  mkdirSync(versions, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  // A failed download leaves a zero-byte file for a newer version behind. The
+  // symlink, not the highest entry, decides which version is active.
+  writeFileSync(join(versions, "2.9.9"), "");
+  writeFileSync(join(versions, "2.4.1"), "binary");
+  symlinkSync(join(versions, "2.4.1"), join(bin, "claude"));
+
+  await withEnv({ CLAUDE_CODE_VERSION: undefined, PATH: bin }, async () => {
+    assert.equal(await userAgentFrom(await loadHooks()), "claude-cli/2.4.1 (external, cli)");
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("reads the version from an npm Claude Code install", async () => {
+  const root = mkdtempSync(join(tmpdir(), "claude-npm-"));
+  const packageDir = join(root, "node_modules", "@anthropic-ai", "claude-code");
+  const bin = join(root, "bin");
+  mkdirSync(packageDir, { recursive: true });
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(packageDir, "cli.js"), "");
+  writeFileSync(
+    join(packageDir, "package.json"),
+    JSON.stringify({ name: "@anthropic-ai/claude-code", version: "2.3.7" }),
+  );
+  symlinkSync(join(packageDir, "cli.js"), join(bin, "claude"));
+
+  await withEnv({ CLAUDE_CODE_VERSION: undefined, PATH: bin }, async () => {
+    assert.equal(await userAgentFrom(await loadHooks()), "claude-cli/2.3.7 (external, cli)");
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("falls back to the pinned version when Claude Code is absent", async () => {
+  const empty = mkdtempSync(join(tmpdir(), "claude-absent-"));
+
+  await withEnv({ CLAUDE_CODE_VERSION: undefined, PATH: empty, HOME: empty }, async () => {
+    assert.equal(
+      await userAgentFrom(await loadHooks()),
+      `claude-cli/${FALLBACK_VERSION} (external, cli)`,
+    );
+  });
+
+  rmSync(empty, { recursive: true, force: true });
 });
 
 test("tool names round-trip without changing case", async () => {

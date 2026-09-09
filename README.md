@@ -29,7 +29,8 @@ an opaque `429` (`{"message":"Error"}`). This plugin rewrites every request to
 
 - registers a `Claude Pro/Max` browser login using OAuth and PKCE
 - lets OpenCode 2 store credentials and refresh expired tokens
-- sets the `claude-cli` user-agent and required `anthropic-beta` headers
+- sets the `claude-cli` user-agent, matching your installed Claude Code version,
+  and the required `anthropic-beta` headers
 - adds the `x-anthropic-billing-header` system block
 - prepends the Claude Code identity to the system prompt and relocates remaining
   system text into the first user message
@@ -59,9 +60,22 @@ This adaptation only targets OpenCode 2. OpenCode 1 users should use the origina
 
 ## Compatibility
 
-Built against `opencode2` `0.0.0-beta-18743`. Version `0.1.2` reports Claude Code
-`2.1.257` to meet Anthropic's model compatibility check. The v2 plugin API is beta
-and may change; pin accordingly.
+Built against `opencode2` `0.0.0-beta-18743`. The v2 plugin API is beta and may
+change; pin accordingly.
+
+The plugin reports a Claude Code version to meet Anthropic's model compatibility
+check. It reads that version from your own install rather than pinning one, in
+this order:
+
+1. the `CLAUDE_CODE_VERSION` environment variable, if it looks like a version
+2. a native install — it follows the `claude` symlink on your `PATH` and takes the
+   version from the target path
+3. an npm install — it reads the version from `@anthropic-ai/claude-code`'s
+   `package.json`
+4. `2.1.265`, if no install is found
+
+The lookup is cached for 60 seconds, so a Claude Code update takes effect without
+restarting OpenCode. Set `CLAUDE_CODE_VERSION` to report a specific version.
 
 The runtime uses `@openauthjs/openauth` for PKCE generation. Development uses the
 matching `@opencode-ai/plugin` beta types, TypeScript, and Node.js types to check the

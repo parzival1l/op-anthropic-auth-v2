@@ -2,9 +2,16 @@
 // Port of op-anthropic-auth@0.1.4 to the v2 plugin API.
 // v1 loads op-anthropic-auth itself; this file targets opencode2 only.
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, delimiter, dirname, join } from "node:path";
 import { generatePKCE } from "@openauthjs/openauth/pkce";
 
 const CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
@@ -26,16 +33,107 @@ const PARAGRAPH_REMOVAL_ANCHORS = [
 const TEXT_REPLACEMENTS = [
   { match: "if OpenCode honestly", replacement: "if the assistant honestly" },
 ];
-const CLAUDE_CODE_VERSION = "2.1.257";
+// Used only when the local Claude Code install cannot be found.
+const FALLBACK_CLAUDE_CODE_VERSION = "2.1.265";
 const CLAUDE_CODE_ENTRYPOINT = "sdk-cli";
 const BILLING_HEADER_PREFIX = "x-anthropic-billing-header:";
 const CCH_SALT = "59cf53e54c78";
 const CCH_POSITIONS = [4, 7, 20];
-const REQUEST_USER_AGENT = `claude-cli/${CLAUDE_CODE_VERSION} (external, cli)`;
+const USER_AGENT_PREFIX = "claude-cli/";
 const TOKEN_USER_AGENT = "axios/1.13.6";
+const SEMVER = /^\d+\.\d+\.\d+/;
+const VERSION_CACHE_MS = 60_000;
+const NPM_PACKAGE_NAME = "@anthropic-ai/claude-code";
 
 function isRecord(value) {
   return value != null && typeof value === "object" && !Array.isArray(value);
+}
+
+// ---- Claude Code version discovery ----
+
+// Resolve the `claude` launcher through symlinks. The native installer points
+// ~/.local/bin/claude at ~/.local/share/claude/versions/<version>, so the
+// basename is the active version. Never pick the highest entry in versions/ —
+// a failed download leaves a zero-byte file of a version that cannot run.
+function resolveClaudeBinary() {
+  const candidates = [];
+  const searchPath = process.env.PATH;
+  if (searchPath) {
+    for (const dir of searchPath.split(delimiter)) {
+      if (dir) candidates.push(join(dir, "claude"));
+    }
+  }
+  candidates.push(join(homedir(), ".local", "bin", "claude"));
+  for (const candidate of candidates) {
+    try {
+      if (existsSync(candidate)) return realpathSync(candidate);
+    } catch {
+      // Unreadable entry — keep looking.
+    }
+  }
+  return null;
+}
+
+// npm installs symlink `claude` to <root>/@anthropic-ai/claude-code/cli.js, so
+// walk up from the resolved file to the package manifest.
+function versionFromNpmPackage(binaryPath) {
+  let dir = dirname(binaryPath);
+  for (let depth = 0; depth < 5; depth++) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+      if (isRecord(manifest) && manifest.name === NPM_PACKAGE_NAME) {
+        const version = manifest.version;
+        return typeof version === "string" && SEMVER.test(version) ? version : null;
+      }
+    } catch {
+      // No manifest here — keep walking up.
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
+function detectClaudeCodeVersion() {
+  const override = process.env.CLAUDE_CODE_VERSION;
+  if (override && SEMVER.test(override)) return override;
+  const binary = resolveClaudeBinary();
+  if (!binary) return null;
+  const name = basename(binary);
+  if (SEMVER.test(name)) return name;
+  return versionFromNpmPackage(binary);
+}
+
+let versionCache = { value: "", checkedAt: 0 };
+
+// Cached with a TTL rather than resolved once at import: Claude Code updates
+// itself while the OpenCode server stays up for days, and the request hook runs
+// on every call.
+function claudeCodeVersion() {
+  const now = Date.now();
+  if (versionCache.value && now - versionCache.checkedAt < VERSION_CACHE_MS) {
+    return versionCache.value;
+  }
+  let detected = null;
+  try {
+    detected = detectClaudeCodeVersion();
+  } catch {
+    detected = null;
+  }
+  const value = detected ?? FALLBACK_CLAUDE_CODE_VERSION;
+  versionCache = { value, checkedAt: now };
+  return value;
+}
+
+function requestUserAgent() {
+  return `${USER_AGENT_PREFIX}${claudeCodeVersion()} (external, cli)`;
+}
+
+// Match the prefix, not the whole string. The version can change between a
+// request and its response, and an exact match would skip the rewrite.
+function isOwnUserAgent(value) {
+  return typeof value === "string" && value.startsWith(USER_AGENT_PREFIX);
 }
 
 function isPluginOAuthCredential(value) {
@@ -282,21 +380,22 @@ function computeCCH(messageText) {
   return createHash("sha256").update(messageText).digest("hex").slice(0, 5);
 }
 
-function computeVersionSuffix(messageText) {
+function computeVersionSuffix(messageText, version) {
   const chars = CCH_POSITIONS.map((index) => messageText[index] || "0").join("");
   return createHash("sha256")
-    .update(`${CCH_SALT}${chars}${CLAUDE_CODE_VERSION}`)
+    .update(`${CCH_SALT}${chars}${version}`)
     .digest("hex")
     .slice(0, 3);
 }
 
 function buildBillingHeaderValue(messages) {
   const text = extractFirstUserMessageText(messages);
-  const suffix = computeVersionSuffix(text);
+  const version = claudeCodeVersion();
+  const suffix = computeVersionSuffix(text, version);
   const cch = computeCCH(text);
   return (
     `${BILLING_HEADER_PREFIX} ` +
-    `cc_version=${CLAUDE_CODE_VERSION}.${suffix}; ` +
+    `cc_version=${version}.${suffix}; ` +
     `cc_entrypoint=${CLAUDE_CODE_ENTRYPOINT}; ` +
     `cch=${cch};`
   );
@@ -501,7 +600,7 @@ const plugin = {
         const headers = new Headers(event.request.headers);
         headers.set("authorization", `Bearer ${credential.access}`);
         headers.set("anthropic-beta", mergeBetaHeaders(headers));
-        headers.set("user-agent", REQUEST_USER_AGENT);
+        headers.set("user-agent", requestUserAgent());
         headers.delete("x-api-key");
 
         if (url.pathname === "/v1/messages" && !url.searchParams.has("beta")) {
@@ -527,7 +626,7 @@ const plugin = {
     await ctx.session.hook(
       "http.response",
       async (event) => {
-        if (event.request.headers.get("user-agent") !== REQUEST_USER_AGENT) return;
+        if (!isOwnUserAgent(event.request.headers.get("user-agent"))) return;
         // Rewrite unless the response URL is present and provably non-Anthropic.
         try {
           const url = new URL(event.response.url);
