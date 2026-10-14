@@ -1,0 +1,58 @@
+name: Update pins
+
+on:
+  schedule:
+    - cron: "0 13 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Update pins
+        id: update
+        run: |
+          summary=$(node scripts/update-pins.mjs)
+          echo "$summary"
+          {
+            echo "summary<<EOF"
+            echo "$summary"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install and check
+        if: steps.update.outputs.summary != ''
+        run: |
+          npm install --no-audit --no-fund
+          npm run check
+
+      - name: Open pull request
+        if: steps.update.outputs.summary != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUMMARY: ${{ steps.update.outputs.summary }}
+        run: |
+          branch=automation/update-pins
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$branch"
+          git add package.json package-lock.json index.js test/plugin.test.js README.md
+          git commit -m "Update OpenCode 2 and Claude Code pins" -m "$SUMMARY"
+          git push --force origin "$branch"
+          if gh pr view "$branch" --json state --jq .state 2>/dev/null | grep -q OPEN; then
+            gh pr edit "$branch" --body "$SUMMARY"
+          else
+            gh pr create --head "$branch" --base main \
+              --title "Update OpenCode 2 and Claude Code pins" \
+              --body "$SUMMARY"
+          fi

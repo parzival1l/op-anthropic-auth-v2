@@ -60,7 +60,7 @@ This adaptation only targets OpenCode 2. OpenCode 1 users should use the origina
 
 ## Compatibility
 
-Built against `opencode2` `0.0.0-beta-18743`. The v2 plugin API is beta and may
+Built against `opencode2` `0.0.0-beta-19271`. The v2 plugin API is beta and may
 change; pin accordingly.
 
 The plugin reports a Claude Code version to meet Anthropic's model compatibility
@@ -72,7 +72,7 @@ this order:
    version from the target path
 3. an npm install — it reads the version from `@anthropic-ai/claude-code`'s
    `package.json`
-4. `2.1.265`, if no install is found
+4. `2.1.299`, if no install is found
 
 The lookup is cached for 60 seconds, so a Claude Code update takes effect without
 restarting OpenCode. Set `CLAUDE_CODE_VERSION` to report a specific version.

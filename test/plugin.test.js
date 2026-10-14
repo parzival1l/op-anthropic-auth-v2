@@ -15,7 +15,7 @@ import { after, before, beforeEach, test } from "node:test";
 // install of whoever runs the suite.
 const PINNED_VERSION = "2.1.257";
 // Must match FALLBACK_CLAUDE_CODE_VERSION in index.js.
-const FALLBACK_VERSION = "2.1.265";
+const FALLBACK_VERSION = "2.1.299";
 
 const dataHome = mkdtempSync(join(tmpdir(), "op-anthropic-auth-v2-test-"));
 const authDirectory = join(dataHome, "opencode");

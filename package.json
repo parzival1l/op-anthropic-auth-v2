@@ -44,7 +44,7 @@
     "@openauthjs/openauth": "0.4.3"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "0.0.0-beta-18743",
+    "@opencode-ai/plugin": "0.0.0-beta-19271",
     "@types/node": "24.6.1",
     "typescript": "5.9.3"
   }
