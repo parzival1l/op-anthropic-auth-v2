@@ -34,7 +34,7 @@ const TEXT_REPLACEMENTS = [
   { match: "if OpenCode honestly", replacement: "if the assistant honestly" },
 ];
 // Used only when the local Claude Code install cannot be found.
-const FALLBACK_CLAUDE_CODE_VERSION = "2.1.299";
+const FALLBACK_CLAUDE_CODE_VERSION = "2.1.311";
 const CLAUDE_CODE_ENTRYPOINT = "sdk-cli";
 const BILLING_HEADER_PREFIX = "x-anthropic-billing-header:";
 const CCH_SALT = "59cf53e54c78";

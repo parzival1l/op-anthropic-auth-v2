@@ -72,7 +72,7 @@ this order:
    version from the target path
 3. an npm install — it reads the version from `@anthropic-ai/claude-code`'s
    `package.json`
-4. `2.1.299`, if no install is found
+4. `2.1.311`, if no install is found
 
 The lookup is cached for 60 seconds, so a Claude Code update takes effect without
 restarting OpenCode. Set `CLAUDE_CODE_VERSION` to report a specific version.
