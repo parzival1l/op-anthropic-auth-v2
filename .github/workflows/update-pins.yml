@@ -13,9 +13,9 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 
@@ -36,7 +36,7 @@ jobs:
           npm install --no-audit --no-fund
           npm run check
 
-      - name: Open pull request
+      - name: Open and merge pull request
         if: steps.update.outputs.summary != ''
         env:
           GH_TOKEN: ${{ github.token }}
@@ -56,3 +56,4 @@ jobs:
               --title "Update OpenCode 2 and Claude Code pins" \
               --body "$SUMMARY"
           fi
+          gh pr merge "$branch" --squash --delete-branch
